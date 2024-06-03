@@ -4,6 +4,7 @@ bit = require("bit")
 enabled = false
 delay_ms = 5000
 scene_name = ""
+hide_after_cut = true
 
 hotkey_id = obs.OBS_INVALID_HOTKEY_ID
 
@@ -11,6 +12,7 @@ PROP_HOTKEY = "LIVESTREAM_DELAY_HOTKEY"
 PROP_ENABLED = "LIVESTREAM_DELAY_ENABLED"
 PROP_DELAY = "LIVESTREAM_DELAY_MS"
 PROP_SCENE = "LIVESTREAM_DELAY_SCENE"
+PROP_HIDE = "LIVESTREAM_DELAY_HIDE"
 FILTER = "LIVESTREAM_DELAY"
 
 timer = false
@@ -68,6 +70,24 @@ function remove_filter(source)
     end
 end
 
+function video_hide_recursive(scene)
+    local items = obs.obs_scene_enum_items(scene)
+    if items ~= nil then
+        for _, item in ipairs(items) do
+            local source = obs.obs_sceneitem_get_source(item)
+
+            if obs.obs_source_get_name(source) == scene_name then
+                obs.obs_sceneitem_set_visible(item, false)
+            elseif obs.obs_source_get_unversioned_id(source) == "scene" then
+                video_hide_recursive(obs.obs_scene_from_source(source), new_source_only)
+            elseif obs.obs_source_get_unversioned_id(source) == "group" then
+                video_hide_recursive(obs.obs_group_from_source(source), new_source_only)
+            end
+        end
+    end
+    obs.sceneitem_list_release(items)
+end
+
 function audio_filter_recursive(scene, new_source_only)
     local items = obs.obs_scene_enum_items(scene)
     if items ~= nil then
@@ -119,6 +139,20 @@ function hotkey_callback(pressed)
 	end
 
     livestream_cutoff()
+
+    if hide_after_cut then
+        t = obs.obs_get_output_source(0)
+        s = obs.obs_transition_get_active_source(t)
+        video_hide_recursive(obs.obs_scene_from_source(s))
+        obs.obs_source_release(s)
+        obs.obs_source_release(t)
+    end
+end
+
+function frontend_callback(event)
+    if event == obs.OBS_FRONTEND_EVENT_STREAMING_STARTED then
+        livestream_cutoff()
+    end
 end
 
 function script_description()
@@ -131,6 +165,7 @@ function script_properties()
     local p_delay = obs.obs_properties_add_int_slider(props, PROP_DELAY, '延迟', 0, 10000, 1)
     obs.obs_property_int_set_suffix(p_delay, 'ms')
     local p_video = obs.obs_properties_add_list(props, PROP_SCENE, "延迟场景", obs.OBS_COMBO_TYPE_EDITABLE, obs.OBS_COMBO_FORMAT_STRING)
+    obs.obs_properties_add_bool(props, PROP_HIDE, '按下快捷键后自动隐藏延迟场景（需要手动打开）')
 
 	local sources = obs.obs_frontend_get_scenes()
 	if sources ~= nil then
@@ -165,6 +200,7 @@ function script_update(settings)
 	enabled = obs.obs_data_get_bool(settings, PROP_ENABLED)
 	delay_ms = obs.obs_data_get_int(settings, PROP_DELAY)
 	scene_name = obs.obs_data_get_string(settings, PROP_SCENE)
+    hide_after_cut = obs.obs_data_get_bool(settings, PROP_HIDE)
 
     livestream_cutoff()
 end
@@ -172,6 +208,7 @@ end
 function script_defaults(settings)
 	obs.obs_data_set_default_bool(settings, PROP_ENABLED, false)
 	obs.obs_data_set_default_int(settings, PROP_DELAY, 5000)
+	obs.obs_data_set_default_bool(settings, PROP_HIDE, true)
 end
 
 function script_save(settings)
@@ -183,6 +220,7 @@ end
 function script_load(settings)
     local sh = obs.obs_get_signal_handler()
 	obs.signal_handler_connect(sh, "source_create", source_create)
+    obs.obs_frontend_add_event_callback(frontend_callback)
 
 	hotkey_id = obs.obs_hotkey_register_frontend(PROP_HOTKEY, "这段切掉！", hotkey_callback)
 	local hotkey_save_array = obs.obs_data_get_array(settings, PROP_HOTKEY)
